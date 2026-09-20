@@ -1,0 +1,191 @@
+services:
+  config:
+    build:
+      context: ./config
+    container_name: config
+    ports:
+      - "8888:8888"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/gateway/default"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [ai-platform]
+
+  discovery:
+    build:
+      context: ./discovery
+    container_name: discovery
+    ports:
+      - "8761:8761"
+    environment:
+      CONFIG_SERVER_URL: http://config:8888
+    depends_on:
+      config:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8761/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [ai-platform]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: keycloak
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - keycloak_data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+    networks: [ai-platform]
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: http
+      WEBHOOK_URL: http://localhost:5678/
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    networks: [ai-platform]
+
+  gateway:
+    build:
+      context: ./gateway
+    container_name: gateway
+    ports:
+      - "8000:8000"
+    environment:
+      CONFIG_SERVER_URL: http://config:8888
+      EUREKA_URI: http://discovery:8761/eureka
+      EUREKA_INSTANCE_HOSTNAME: gateway
+      # Browser-facing: must match Keycloak's KC_HOSTNAME so it matches the token's iss claim.
+      KEYCLOAK_ISSUER_URI: http://localhost:8080/realms/ai-agentic
+      # Container-facing: lets the gateway fetch signing keys over the compose network.
+      KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/ai-agentic/protocol/openid-connect/certs
+      KEYCLOAK_BASE_URI: http://localhost:8080
+      VISION_AI_URI: http://vision-ai:8001
+      RESUME_INTELLIGENCE_URI: http://resume-intelligence:8002
+      RECRUITMENT_URI: http://ai-hiring-assistant:8003
+    depends_on:
+      config:
+        condition: service_healthy
+      discovery:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [ai-platform]
+
+  vision-ai:
+    build:
+      context: ./Vision AI
+    container_name: vision-ai
+    ports:
+      - "8001:8001"
+    environment:
+      EUREKA_SERVER_URL: http://discovery:8761/eureka/
+      INSTANCE_HOST: vision-ai
+      KEYCLOAK_BASE_URI: http://localhost:8080
+    volumes:
+      - vision_ai_torch_cache:/root/.cache/torch
+    depends_on:
+      discovery:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/docs')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [ai-platform]
+
+  resume-intelligence:
+    build:
+      context: ./Resume Intelligence
+    container_name: resume-intelligence
+    ports:
+      - "8002:8002"
+    environment:
+      EUREKA_SERVER_URL: http://discovery:8761/eureka/
+      INSTANCE_HOST: resume-intelligence
+      KEYCLOAK_BASE_URI: http://localhost:8080
+      # Ollama runs locally on the host machine, not in this stack.
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+    volumes:
+      - resume_intelligence_chroma:/app/chroma_db
+    depends_on:
+      discovery:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/docs')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [ai-platform]
+
+  ai-hiring-assistant:
+    build:
+      context: ./AI Hiring Assistant
+    container_name: ai-hiring-assistant
+    ports:
+      - "8003:8003"
+    environment:
+      EUREKA_SERVER_URL: http://discovery:8761/eureka/
+      INSTANCE_HOST: ai-hiring-assistant
+      KEYCLOAK_BASE_URI: http://localhost:8080
+      N8N_WEBHOOK_URL: http://n8n:5678/webhook/27c75e4f-890f-4e5e-aa96-2e22f04e9ee8
+    depends_on:
+      discovery:
+        condition: service_healthy
+      n8n:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/docs')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [ai-platform]
+
+networks:
+  ai-platform:
+    driver: bridge
+
+volumes:
+  vision_ai_torch_cache:
+  resume_intelligence_chroma:
+  keycloak_data:
+  n8n_data:

@@ -1,0 +1,57 @@
+eureka:
+  instance:
+    hostname: ${EUREKA_INSTANCE_HOSTNAME:localhost}
+  client:
+    register-with-eureka: true
+    fetch-registry: true
+    service-url:
+      defaultZone: ${EUREKA_URI:http://localhost:8761/eureka}
+gateway:
+#  menu-url: http://localhost:8081
+#  order-url: http://localhost:8082
+#  payment-url: http://localhost:8083
+spring:
+  application:
+    name: gateway
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://127.0.0.1:8080/realms/ai-agentic}
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://127.0.0.1:8080/realms/ai-agentic/protocol/openid-connect/certs}
+
+services:
+  vision-ai:
+    uri: ${VISION_AI_URI:http://localhost:8001}
+  resume-intelligence:
+    uri: ${RESUME_INTELLIGENCE_URI:http://localhost:8002}
+  recruitment:
+    uri: ${RECRUITMENT_URI:http://localhost:8003}
+
+server:
+  port: 8000
+
+springdoc:
+  api-docs:
+    enabled: true
+
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+
+    oauth:
+      client-id: ai-agentic-api
+      use-pkce-with-authorization-code-grant: true
+
+    urls:
+      - url: /v3/api-docs
+        name: API Gateway Service
+
+      - url: /api/v1/vision/openapi.json
+        name: VISION-AI Service
+
+      - url: /api/v1/resume/openapi.json
+        name: Resume Intelligence Service
+
+      - url: /api/v1/recruitment/openapi.json
+        name: AI Hiring Assistant Service
